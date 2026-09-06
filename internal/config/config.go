@@ -1,0 +1,317 @@
+package config
+
+import (
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/url"
+	"os"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/actions/scaleset"
+	"github.com/spf13/cobra"
+	"k8s.io/apimachinery/pkg/api/resource"
+)
+
+const (
+	defaultRunnerVersion = "latest"
+	defaultRunnerArch    = "x64"
+)
+
+var guestUserPattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]*[$]?$`)
+
+type Config struct {
+	RegistrationURL   string
+	ScaleSetName      string
+	RunnerGroup       string
+	Labels            []string
+	Token             string
+	TokenFile         string
+	Kubeconfig        string
+	KubeconfigBase64  string
+	KubeContext       string
+	Namespace         string
+	RunnerImage       string
+	Network           string
+	MinRunners        int
+	MaxRunners        int
+	CPU               int
+	Memory            string
+	DiskSize          string
+	RunnerVersion     string
+	RunnerArch        string
+	RunnerUser        string
+	RunnerHome        string
+	SkipRunnerInstall bool
+	VMCreateTimeout   time.Duration
+	VMDeleteTimeout   time.Duration
+	ReconcileInterval time.Duration
+	MaxParallelCreate int
+	LogLevel          string
+	LogFormat         string
+	ValidateOnly      bool
+}
+
+func BindFlags(cmd *cobra.Command, c *Config) {
+	f := cmd.Flags()
+	f.StringVar(&c.RegistrationURL, "url", "", "GitHub repository, organization, or enterprise URL")
+	f.StringVar(&c.ScaleSetName, "name", "", "GitHub runner scale set name")
+	f.StringVar(&c.RunnerGroup, "runner-group", "", "GitHub runner group name")
+	f.StringSliceVar(&c.Labels, "labels", nil, "Runner labels (comma-separated or repeated)")
+	f.StringVar(&c.TokenFile, "token-file", "", "File containing the GitHub PAT")
+	f.StringVar(&c.Kubeconfig, "kubeconfig", "", "Harvester kubeconfig file")
+	f.StringVar(&c.KubeContext, "kube-context", "", "Kubeconfig context")
+	f.StringVar(&c.Namespace, "namespace", "", "Namespace for runner VMs")
+	f.StringVar(&c.RunnerImage, "runner-image", "", "Harvester image resource name or namespace/name")
+	f.StringVar(&c.Network, "network", "", "Harvester VM network resource name or namespace/name")
+	f.IntVar(&c.MinRunners, "min-runners", -1, "Minimum runner count")
+	f.IntVar(&c.MaxRunners, "max-runners", -1, "Maximum runner count")
+	f.IntVar(&c.CPU, "cpu", -1, "vCPUs per runner VM")
+	f.StringVar(&c.Memory, "memory", "", "Memory per runner VM")
+	f.StringVar(&c.DiskSize, "disk-size", "", "Root disk size per runner VM")
+	f.StringVar(&c.RunnerVersion, "runner-version", "", "Actions runner version, or latest")
+	f.StringVar(&c.RunnerArch, "runner-arch", "", "Actions runner architecture: x64, arm64, arm, or x86")
+	f.StringVar(&c.RunnerUser, "runner-user", "", "Guest OS user for the runner")
+	f.StringVar(&c.RunnerHome, "runner-home", "", "Guest installation directory")
+	f.BoolVar(&c.SkipRunnerInstall, "skip-runner-install", false, "Use a runner-ready image and skip installing the Actions runner in cloud-init")
+	f.DurationVar(&c.VMCreateTimeout, "vm-create-timeout", 0, "Deadline before a provisioning VM is replaced")
+	f.DurationVar(&c.VMDeleteTimeout, "vm-delete-timeout", 0, "VM cleanup timeout")
+	f.DurationVar(&c.ReconcileInterval, "reconcile-interval", 0, "Harvester reconciliation interval")
+	f.IntVar(&c.MaxParallelCreate, "max-parallel-creates", -1, "Maximum concurrent VM API creates")
+	f.StringVar(&c.LogLevel, "log-level", "", "Log level: debug, info, warn, or error")
+	f.StringVar(&c.LogFormat, "log-format", "", "Log format: text or json")
+	f.BoolVar(&c.ValidateOnly, "validate-only", false, "Validate configured GitHub and Harvester inputs without creating resources")
+}
+
+func (c *Config) Complete() error {
+	c.RegistrationURL = value(c.RegistrationURL, "GITHUB_CONFIG_URL", "")
+	c.ScaleSetName = value(c.ScaleSetName, "GITHUB_SCALESET_NAME", "")
+	c.RunnerGroup = value(c.RunnerGroup, "GITHUB_RUNNER_GROUP", scaleset.DefaultRunnerGroup)
+	if len(c.Labels) == 0 {
+		if labels := os.Getenv("GITHUB_RUNNER_LABELS"); labels != "" {
+			c.Labels = strings.Split(labels, ",")
+		}
+	}
+	c.Token = os.Getenv("GITHUB_TOKEN")
+	c.TokenFile = value(c.TokenFile, "GITHUB_TOKEN_FILE", "")
+	c.Kubeconfig = value(c.Kubeconfig, "KUBECONFIG", "")
+	c.KubeconfigBase64 = os.Getenv("HARVESTER_KUBECONFIG_B64")
+	c.KubeContext = value(c.KubeContext, "HARVESTER_KUBE_CONTEXT", "")
+	c.Namespace = value(c.Namespace, "HARVESTER_NAMESPACE", "default")
+	c.RunnerImage = value(c.RunnerImage, "HARVESTER_RUNNER_IMAGE", "")
+	c.Network = value(c.Network, "HARVESTER_NETWORK", "")
+	c.Memory = value(c.Memory, "HARVESTER_MEMORY", "4Gi")
+	c.DiskSize = value(c.DiskSize, "HARVESTER_DISK_SIZE", "20Gi")
+	c.RunnerVersion = strings.TrimPrefix(value(c.RunnerVersion, "ACTIONS_RUNNER_VERSION", defaultRunnerVersion), "v")
+	c.RunnerArch = value(c.RunnerArch, "ACTIONS_RUNNER_ARCH", defaultRunnerArch)
+	c.RunnerUser = value(c.RunnerUser, "HARVESTER_RUNNER_USER", "runner")
+	c.RunnerHome = value(c.RunnerHome, "HARVESTER_RUNNER_HOME", "/opt/actions-runner")
+	if !c.SkipRunnerInstall {
+		skipRunnerInstall, err := envBool("HARVESTER_SKIP_RUNNER_INSTALL", false)
+		if err != nil {
+			return err
+		}
+		c.SkipRunnerInstall = skipRunnerInstall
+	}
+	c.LogLevel = value(c.LogLevel, "LOG_LEVEL", "info")
+	c.LogFormat = value(c.LogFormat, "LOG_FORMAT", "text")
+
+	var err error
+	if c.MinRunners == -1 {
+		c.MinRunners, err = envInt("MIN_RUNNERS", 0)
+		if err != nil {
+			return err
+		}
+	}
+	if c.MaxRunners == -1 {
+		c.MaxRunners, err = envInt("MAX_RUNNERS", 10)
+		if err != nil {
+			return err
+		}
+	}
+	if c.CPU == -1 {
+		c.CPU, err = envInt("HARVESTER_CPU", 2)
+		if err != nil {
+			return err
+		}
+	}
+	if c.MaxParallelCreate == -1 {
+		c.MaxParallelCreate, err = envInt("MAX_PARALLEL_CREATES", 5)
+		if err != nil {
+			return err
+		}
+	}
+	if c.VMCreateTimeout == 0 {
+		c.VMCreateTimeout, err = envDuration("VM_CREATE_TIMEOUT", 10*time.Minute)
+		if err != nil {
+			return err
+		}
+	}
+	if c.VMDeleteTimeout == 0 {
+		c.VMDeleteTimeout, err = envDuration("VM_DELETE_TIMEOUT", 5*time.Minute)
+		if err != nil {
+			return err
+		}
+	}
+	if c.ReconcileInterval == 0 {
+		c.ReconcileInterval, err = envDuration("RECONCILE_INTERVAL", 15*time.Second)
+		if err != nil {
+			return err
+		}
+	}
+
+	if c.TokenFile != "" {
+		contents, readErr := os.ReadFile(c.TokenFile)
+		if readErr != nil {
+			return fmt.Errorf("read GitHub token file: %w", readErr)
+		}
+		c.Token = strings.TrimSpace(string(contents))
+	}
+	return c.Validate()
+}
+
+func (c Config) Validate() error {
+	if _, err := url.ParseRequestURI(c.RegistrationURL); err != nil || !strings.HasPrefix(c.RegistrationURL, "https://") {
+		return errors.New("--url must be a valid HTTPS GitHub registration URL")
+	}
+	if c.ScaleSetName == "" {
+		return errors.New("--name is required")
+	}
+	if c.Token == "" {
+		return errors.New("GitHub PAT is required through --token-file, GITHUB_TOKEN_FILE, or GITHUB_TOKEN")
+	}
+	if c.Kubeconfig == "" && c.KubeconfigBase64 == "" {
+		return errors.New("Harvester kubeconfig is required through --kubeconfig, KUBECONFIG, or HARVESTER_KUBECONFIG_B64")
+	}
+	if c.RunnerImage == "" {
+		return errors.New("--runner-image is required")
+	}
+	if c.Network == "" {
+		return errors.New("--network is required")
+	}
+	if c.MinRunners < 0 || c.MaxRunners < c.MinRunners {
+		return errors.New("runner counts must satisfy 0 <= min-runners <= max-runners")
+	}
+	if c.CPU < 1 || c.MaxParallelCreate < 1 {
+		return errors.New("cpu and max-parallel-creates must be positive")
+	}
+	if c.VMCreateTimeout <= 0 || c.VMDeleteTimeout <= 0 || c.ReconcileInterval <= 0 {
+		return errors.New("timeouts and reconcile-interval must be positive")
+	}
+	mem, err := resource.ParseQuantity(c.Memory)
+	if err != nil || mem.Sign() <= 0 {
+		return fmt.Errorf("invalid memory quantity %q", c.Memory)
+	}
+	disk, err := resource.ParseQuantity(c.DiskSize)
+	if err != nil || disk.Sign() <= 0 {
+		return fmt.Errorf("invalid disk-size quantity %q", c.DiskSize)
+	}
+	for _, name := range []string{c.Namespace, c.RunnerUser} {
+		if strings.TrimSpace(name) == "" {
+			return errors.New("namespace and runner-user cannot be empty")
+		}
+	}
+	if !guestUserPattern.MatchString(c.RunnerUser) {
+		return fmt.Errorf("runner-user %q is not a valid Linux account name", c.RunnerUser)
+	}
+	if !strings.HasPrefix(c.RunnerHome, "/") {
+		return errors.New("runner-home must be an absolute path")
+	}
+	switch c.RunnerArch {
+	case "x64", "arm64", "arm", "x86":
+	default:
+		return fmt.Errorf("unsupported runner architecture %q", c.RunnerArch)
+	}
+	for i, label := range c.Labels {
+		if strings.TrimSpace(label) == "" {
+			return fmt.Errorf("runner label at index %d is empty", i)
+		}
+	}
+	return nil
+}
+
+func (c Config) KubeconfigValue() string {
+	if c.KubeconfigBase64 != "" {
+		return c.KubeconfigBase64
+	}
+	return c.Kubeconfig
+}
+
+func (c Config) ScaleSetLabels() []scaleset.Label {
+	if len(c.Labels) == 0 {
+		return []scaleset.Label{{Name: c.ScaleSetName}}
+	}
+	labels := make([]scaleset.Label, 0, len(c.Labels))
+	for _, label := range c.Labels {
+		labels = append(labels, scaleset.Label{Name: strings.TrimSpace(label)})
+	}
+	return labels
+}
+
+func (c Config) Logger() *slog.Logger {
+	var level slog.Level
+	switch strings.ToLower(c.LogLevel) {
+	case "debug":
+		level = slog.LevelDebug
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	default:
+		level = slog.LevelInfo
+	}
+	opts := &slog.HandlerOptions{Level: level}
+	if strings.EqualFold(c.LogFormat, "json") {
+		return slog.New(slog.NewJSONHandler(os.Stdout, opts))
+	}
+	return slog.New(slog.NewTextHandler(os.Stdout, opts))
+}
+
+func value(current, envName, fallback string) string {
+	if current != "" {
+		return current
+	}
+	if env := os.Getenv(envName); env != "" {
+		return env
+	}
+	return fallback
+}
+
+func envInt(name string, fallback int) (int, error) {
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback, nil
+	}
+	n, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("parse %s: %w", name, err)
+	}
+	return n, nil
+}
+
+func envDuration(name string, fallback time.Duration) (time.Duration, error) {
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback, nil
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("parse %s: %w", name, err)
+	}
+	return d, nil
+}
+
+func envBool(name string, fallback bool) (bool, error) {
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback, nil
+	}
+	b, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("parse %s: %w", name, err)
+	}
+	return b, nil
+}
