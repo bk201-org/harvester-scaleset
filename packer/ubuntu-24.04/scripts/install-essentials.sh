@@ -6,6 +6,11 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
 apt-get update
+
+apt-get install -y --no-install-recommends \
+  qemu-guest-agent
+systemctl enable qemu-guest-agent.service
+
 apt-get install -y --no-install-recommends \
   bash \
   ca-certificates \
