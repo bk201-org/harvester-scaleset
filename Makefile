@@ -7,7 +7,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT_SHA ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 LDFLAGS ?= -s -w -X main.version=$(VERSION) -X main.commitSHA=$(COMMIT_SHA)
 
-.PHONY: all build test docker-build
+.PHONY: all build test docker-build clean
 
 all: build
 
@@ -24,3 +24,7 @@ docker-build:
 		--build-arg COMMIT_SHA=$(COMMIT_SHA) \
 		--tag $(IMAGE) \
 		.
+
+clean:
+	rm -f -- "$(OUTPUT_DIR)/$(BINARY)"
+	if [ -d "$(OUTPUT_DIR)" ]; then rmdir --ignore-fail-on-non-empty "$(OUTPUT_DIR)"; fi
