@@ -2,7 +2,7 @@
 
 This Packer template turns Ubuntu's Noble amd64 cloud image into a Harvester-importable qcow2 image with the GitHub Actions runner, Docker runtime, and essential workflow utilities already installed.
 
-The image includes Docker Engine, Buildx, Compose v2, Git, Git LFS, SSH, common archive tools, `curl`, `wget`, `jq`, and basic network diagnostics. Project toolchains and infrastructure tools are intentionally left to workflow setup actions. The `runner` user belongs to the `docker` group, which gives jobs root-equivalent access to their disposable VM.
+The image includes Docker Engine, Buildx, Compose v2, Git, Git LFS, SSH, common archive tools, `curl`, `wget`, `jq`, and basic network diagnostics. Project toolchains and infrastructure tools are intentionally left to workflow setup actions. The `runner` user belongs to the `docker` group and has passwordless sudo, which gives jobs root-equivalent access to their disposable VM.
 
 The source image is fixed to:
 

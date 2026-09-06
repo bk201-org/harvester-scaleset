@@ -22,6 +22,7 @@ apt-get install -y --no-install-recommends \
   iproute2 \
   iputils-ping \
   jq \
+  make \
   netcat-openbsd \
   openssh-client \
   openssl \
@@ -62,6 +63,10 @@ if ! id "${RUNNER_USER}" >/dev/null 2>&1; then
   useradd --system --create-home --shell /bin/bash "${RUNNER_USER}"
 fi
 usermod --append --groups docker "${RUNNER_USER}"
+printf '%s ALL=(ALL:ALL) NOPASSWD:ALL\n' "${RUNNER_USER}" \
+  > /etc/sudoers.d/90-actions-runner
+chmod 0440 /etc/sudoers.d/90-actions-runner
+visudo --check --file=/etc/sudoers.d/90-actions-runner
 
 systemctl enable docker.service containerd.service
 systemctl start docker.service
