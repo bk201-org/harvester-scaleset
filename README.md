@@ -21,7 +21,35 @@ First boot downloads and installs the runner by default, so a new VM can take se
 ## Build
 
 ```bash
-go build -o harvester-scaleset ./cmd/harvester-scaleset
+make build
+make test
+```
+
+The binary is written to `bin/harvester-scaleset`. Override `OUTPUT_DIR`, `BINARY`, `VERSION`, or `COMMIT_SHA` when needed.
+
+## Container image
+
+Build a non-root, distroless container image with:
+
+```bash
+make docker-build
+```
+
+Set `IMAGE` to choose another image name or tag. The container accepts the same flags and environment variables as the binary. Kubeconfig and token files mounted from the host must be readable by the container's non-root user; alternatively, run it with the host user's UID and GID:
+
+```bash
+docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  --mount type=bind,src=/secure/path/github-token,dst=/run/secrets/github-token,readonly \
+  --mount type=bind,src=/secure/path/harvester-kubeconfig,dst=/run/secrets/kubeconfig,readonly \
+  harvester-scaleset:dev \
+  --url https://github.com/example/actions-repository \
+  --name harvester-runners \
+  --token-file /run/secrets/github-token \
+  --kubeconfig /run/secrets/kubeconfig \
+  --runner-image default/ubuntu-24.04-actions-runner \
+  --network default/vm-network \
+  --skip-runner-install
 ```
 
 ## Validate configuration

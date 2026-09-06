@@ -1,0 +1,8 @@
+.git
+.gitignore
+bin
+packer
+validation
+Dockerfile
+Makefile
+README.md
