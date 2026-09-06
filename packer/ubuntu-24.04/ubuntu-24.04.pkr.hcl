@@ -132,6 +132,14 @@ build {
 
   provisioner "shell" {
     environment_vars = [
+      "RUNNER_USER=runner",
+    ]
+    execute_command = "chmod +x {{ .Path }}; {{ .Vars }} sudo -E {{ .Path }}"
+    script          = "${path.root}/scripts/install-essentials.sh"
+  }
+
+  provisioner "shell" {
+    environment_vars = [
       "RUNNER_ARCH=x64",
       "RUNNER_HOME=/opt/actions-runner",
       "RUNNER_USER=runner",

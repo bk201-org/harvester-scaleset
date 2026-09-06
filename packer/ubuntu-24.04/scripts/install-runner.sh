@@ -7,8 +7,6 @@ set -euo pipefail
 : "${RUNNER_VERSION:?RUNNER_VERSION is required}"
 
 export DEBIAN_FRONTEND=noninteractive
-apt-get update
-apt-get install -y --no-install-recommends ca-certificates curl gzip python3 tar
 
 release_endpoint=https://api.github.com/repos/actions/runner/releases/latest
 if [[ "${RUNNER_VERSION}" != latest ]]; then
@@ -67,9 +65,6 @@ curl \
   "${download_url}"
 echo "${sha256}  ${archive}" | sha256sum --check --strict
 
-if ! id "${RUNNER_USER}" >/dev/null 2>&1; then
-  useradd --system --create-home --home-dir "${RUNNER_HOME}" --shell /bin/bash "${RUNNER_USER}"
-fi
 runner_group=$(id -gn "${RUNNER_USER}")
 install -d -o "${RUNNER_USER}" -g "${runner_group}" -m 0755 "${RUNNER_HOME}"
 tar --extract --gzip --file "${archive}" --directory "${RUNNER_HOME}"
