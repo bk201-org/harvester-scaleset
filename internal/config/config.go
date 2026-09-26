@@ -24,35 +24,36 @@ const (
 var guestUserPattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]*[$]?$`)
 
 type Config struct {
-	RegistrationURL   string
-	ScaleSetName      string
-	RunnerGroup       string
-	Labels            []string
-	Token             string
-	TokenFile         string
-	Kubeconfig        string
-	KubeconfigBase64  string
-	KubeContext       string
-	Namespace         string
-	RunnerImage       string
-	Network           string
-	MinRunners        int
-	MaxRunners        int
-	CPU               int
-	Memory            string
-	DiskSize          string
-	RunnerVersion     string
-	RunnerArch        string
-	RunnerUser        string
-	RunnerHome        string
-	SkipRunnerInstall bool
-	VMCreateTimeout   time.Duration
-	VMDeleteTimeout   time.Duration
-	ReconcileInterval time.Duration
-	MaxParallelCreate int
-	LogLevel          string
-	LogFormat         string
-	ValidateOnly      bool
+	RegistrationURL        string
+	ScaleSetName           string
+	RunnerGroup            string
+	Labels                 []string
+	Token                  string
+	TokenFile              string
+	Kubeconfig             string
+	KubeconfigBase64       string
+	KubeContext            string
+	Namespace              string
+	RunnerImage            string
+	RunnerImageDisplayName string
+	Network                string
+	MinRunners             int
+	MaxRunners             int
+	CPU                    int
+	Memory                 string
+	DiskSize               string
+	RunnerVersion          string
+	RunnerArch             string
+	RunnerUser             string
+	RunnerHome             string
+	SkipRunnerInstall      bool
+	VMCreateTimeout        time.Duration
+	VMDeleteTimeout        time.Duration
+	ReconcileInterval      time.Duration
+	MaxParallelCreate      int
+	LogLevel               string
+	LogFormat              string
+	ValidateOnly           bool
 }
 
 func BindFlags(cmd *cobra.Command, c *Config) {
@@ -65,7 +66,8 @@ func BindFlags(cmd *cobra.Command, c *Config) {
 	f.StringVar(&c.Kubeconfig, "kubeconfig", "", "Harvester kubeconfig file")
 	f.StringVar(&c.KubeContext, "kube-context", "", "Kubeconfig context")
 	f.StringVar(&c.Namespace, "namespace", "", "Namespace for runner VMs")
-	f.StringVar(&c.RunnerImage, "runner-image", "", "Harvester image resource name or namespace/name")
+	f.StringVar(&c.RunnerImage, "runner-image", "", "Harvester image resource name, optionally namespace/name")
+	f.StringVar(&c.RunnerImageDisplayName, "runner-image-display-name", "", "Exact Harvester image spec.displayName, optionally namespace/name")
 	f.StringVar(&c.Network, "network", "", "Harvester VM network resource name or namespace/name")
 	f.IntVar(&c.MinRunners, "min-runners", -1, "Minimum runner count")
 	f.IntVar(&c.MaxRunners, "max-runners", -1, "Maximum runner count")
@@ -102,6 +104,7 @@ func (c *Config) Complete() error {
 	c.KubeContext = value(c.KubeContext, "HARVESTER_KUBE_CONTEXT", "")
 	c.Namespace = value(c.Namespace, "HARVESTER_NAMESPACE", "default")
 	c.RunnerImage = value(c.RunnerImage, "HARVESTER_RUNNER_IMAGE", "")
+	c.RunnerImageDisplayName = value(c.RunnerImageDisplayName, "HARVESTER_RUNNER_IMAGE_DISPLAY_NAME", "")
 	c.Network = value(c.Network, "HARVESTER_NETWORK", "")
 	c.Memory = value(c.Memory, "HARVESTER_MEMORY", "4Gi")
 	c.DiskSize = value(c.DiskSize, "HARVESTER_DISK_SIZE", "20Gi")
@@ -186,8 +189,11 @@ func (c Config) Validate() error {
 	if c.Kubeconfig == "" && c.KubeconfigBase64 == "" {
 		return errors.New("Harvester kubeconfig is required through --kubeconfig, KUBECONFIG, or HARVESTER_KUBECONFIG_B64")
 	}
-	if c.RunnerImage == "" {
-		return errors.New("--runner-image is required")
+	if c.RunnerImage == "" && c.RunnerImageDisplayName == "" {
+		return errors.New("either --runner-image or --runner-image-display-name is required")
+	}
+	if c.RunnerImage != "" && c.RunnerImageDisplayName != "" {
+		return errors.New("--runner-image and --runner-image-display-name cannot be used together")
 	}
 	if c.Network == "" {
 		return errors.New("--network is required")

@@ -138,14 +138,24 @@ func (m *Manager) Preflight(ctx context.Context) error {
 	if _, err := m.client.Kube.CoreV1().Namespaces().Get(ctx, m.cfg.Namespace, metav1.GetOptions{}); err != nil {
 		return fmt.Errorf("get runner namespace %q: %w", m.cfg.Namespace, err)
 	}
-	imageNS, imageName, err := namespacedName(m.cfg.RunnerImage, m.cfg.Namespace)
+	imageValue := m.cfg.RunnerImage
+	if m.cfg.RunnerImageDisplayName != "" {
+		imageValue = m.cfg.RunnerImageDisplayName
+	}
+	imageNS, imageIdentifier, err := namespacedName(imageValue, m.cfg.Namespace)
 	if err != nil {
 		return fmt.Errorf("parse runner image: %w", err)
 	}
-	image, err := m.client.Dynamic.Resource(imageGVR).Namespace(imageNS).Get(ctx, imageName, metav1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("get runner image %s/%s: %w", imageNS, imageName, err)
+	var image *unstructured.Unstructured
+	if m.cfg.RunnerImageDisplayName != "" {
+		image, err = m.findRunnerImageByDisplayName(ctx, imageNS, imageIdentifier)
+	} else {
+		image, err = m.client.Dynamic.Resource(imageGVR).Namespace(imageNS).Get(ctx, imageIdentifier, metav1.GetOptions{})
 	}
+	if err != nil {
+		return fmt.Errorf("get runner image %s/%s: %w", imageNS, imageIdentifier, err)
+	}
+	imageName := image.GetName()
 	if !conditionTrue(image, "Imported") {
 		return fmt.Errorf("runner image %s/%s is not imported and ready", imageNS, imageName)
 	}
@@ -186,6 +196,32 @@ func (m *Manager) Preflight(ctx context.Context) error {
 	}
 	m.logger.Info("Harvester preflight complete", "namespace", m.cfg.Namespace, "image", m.imageRef, "network", networkNS+"/"+networkName, "runnerVersion", runnerVersion)
 	return nil
+}
+
+func (m *Manager) findRunnerImageByDisplayName(ctx context.Context, namespace, wantedDisplayName string) (*unstructured.Unstructured, error) {
+	list, err := m.client.Dynamic.Resource(imageGVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list images in namespace %q to find displayName %q: %w", namespace, wantedDisplayName, err)
+	}
+	var match *unstructured.Unstructured
+	for i := range list.Items {
+		candidate := &list.Items[i]
+		displayName, _, fieldErr := unstructured.NestedString(candidate.Object, "spec", "displayName")
+		if fieldErr != nil {
+			return nil, fmt.Errorf("read image %s/%s displayName: %w", namespace, candidate.GetName(), fieldErr)
+		}
+		if displayName != wantedDisplayName {
+			continue
+		}
+		if match != nil {
+			return nil, fmt.Errorf("displayName %q matches multiple images in namespace %q (%s, %s)", wantedDisplayName, namespace, match.GetName(), candidate.GetName())
+		}
+		match = candidate
+	}
+	if match == nil {
+		return nil, fmt.Errorf("no image with displayName %q in namespace %q", wantedDisplayName, namespace)
+	}
+	return match, nil
 }
 
 func (m *Manager) CreateRunner(ctx context.Context, spec RunnerSpec) error {

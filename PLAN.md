@@ -41,10 +41,11 @@ The Terraform provider source also establishes reusable patterns:
 | Scale set name | `--name` | `GITHUB_SCALESET_NAME` | Unique within the runner group. |
 | GitHub PAT | `--token-file` | `GITHUB_TOKEN` | Prefer a token file or environment variable so the PAT is not exposed in the process list. The PAT stays in the controller and is never passed to a runner VM. |
 | Harvester kubeconfig | `--kubeconfig` | `KUBECONFIG` | File path; also accept base64 content through `HARVESTER_KUBECONFIG_B64`. |
-| Runner image | `--runner-image` | `HARVESTER_RUNNER_IMAGE` | Harvester VM image resource name, or `namespace/name`. |
+| Runner image resource name | `--runner-image` | `HARVESTER_RUNNER_IMAGE` | Kubernetes resource name, optionally prefixed by `namespace/`; mutually exclusive with the display-name flag. |
+| Runner image display name | `--runner-image-display-name` | `HARVESTER_RUNNER_IMAGE_DISPLAY_NAME` | Exact `.spec.displayName`, optionally prefixed by `namespace/`; mutually exclusive with the resource-name flag. |
 | VM network | `--network` | `HARVESTER_NETWORK` | Harvester VM network/NAD name, or `namespace/name`. |
 
-CLI values take precedence over environment values. Secrets must be redacted from validation errors and logs.
+CLI values take precedence over their corresponding environment values. Exactly one image selector must be set. Secrets must be redacted from validation errors and logs.
 
 ### Optional inputs and proposed defaults
 
@@ -140,7 +141,7 @@ Before creating the GitHub scale set:
 
 1. Load the kubeconfig, build clients, and verify API access.
 2. Confirm the namespace exists.
-3. Resolve the image by resource name; if desired later, add an explicit `--runner-image-display-name` mode rather than ambiguously treating names as display names.
+3. Resolve the image by resource name when `--runner-image` is set, or by exact `.spec.displayName` in the selected namespace when `--runner-image-display-name` is set. Reject duplicate display-name matches.
 4. Require the image to be ready and capture its storage class.
 5. Resolve the network attachment definition in its namespace.
 6. Unless runner installation is disabled, resolve the requested runner version, architecture-specific download URL, and published checksum before accepting jobs.

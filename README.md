@@ -63,7 +63,7 @@ Validation checks the runner release and Harvester namespace, image, and network
   --name harvester-runners \
   --token-file /secure/path/github-token \
   --kubeconfig /secure/path/harvester-kubeconfig \
-  --runner-image default/ubuntu-24.04-actions-runner \
+  --runner-image-display-name default/ubuntu-24.04-actions-runner-amd64.qcow2 \
   --network default/vm-network
 ```
 
@@ -99,7 +99,8 @@ Send `SIGINT` or `SIGTERM` for graceful, label-scoped cleanup. The current behav
 | `--kubeconfig` | `KUBECONFIG` | `HARVESTER_KUBECONFIG_B64` may contain base64 instead |
 | `--kube-context` | `HARVESTER_KUBE_CONTEXT` | kubeconfig current context |
 | `--namespace` | `HARVESTER_NAMESPACE` | `default` |
-| `--runner-image` | `HARVESTER_RUNNER_IMAGE` | required |
+| `--runner-image` | `HARVESTER_RUNNER_IMAGE` | Kubernetes resource name; one image selector required |
+| `--runner-image-display-name` | `HARVESTER_RUNNER_IMAGE_DISPLAY_NAME` | Exact `.spec.displayName`; one image selector required |
 | `--network` | `HARVESTER_NETWORK` | required |
 | `--runner-group` | `GITHUB_RUNNER_GROUP` | `default` |
 | `--labels` | `GITHUB_RUNNER_LABELS` | scale-set name |
@@ -120,7 +121,7 @@ Send `SIGINT` or `SIGTERM` for graceful, label-scoped cleanup. The current behav
 | `--log-level` | `LOG_LEVEL` | `info` |
 | `--log-format` | `LOG_FORMAT` | `text` |
 
-CLI values take precedence over environment variables. Image and network values are Kubernetes resource names, either in the runner namespace or written as `namespace/name`.
+CLI values take precedence over their corresponding environment variables. Specify exactly one image selector, through a flag or environment variable: `--runner-image` selects a Kubernetes resource name, while `--runner-image-display-name` selects an exact `.spec.displayName`. Both accept a name in the runner namespace or `namespace/name`. Duplicate display names in the selected namespace are rejected. The controller resolves a display name to the actual image resource name before creating runner disks. The network value is a Kubernetes resource name, either in the runner namespace or as `namespace/name`.
 
 When `--skip-runner-install` is enabled, the selected image must already contain an executable `<runner-home>/run.sh` owned for use by `<runner-user>`. Cloud-init still writes the one-time JIT environment file and systemd service; it fails early if the baked runner executable is absent.
 
@@ -128,7 +129,7 @@ When `--skip-runner-install` is enabled, the selected image must already contain
 
 The GitHub PAT remains in the controller process. A runner VM receives only its short-lived JIT configuration through a per-VM Kubernetes Secret. All controller resources are labeled with their GitHub scale-set ID, and cleanup selects those labels rather than deleting arbitrary namespace resources.
 
-The kubeconfig identity needs permission in the runner namespace to read images and network attachment definitions and to get/list/create/update/delete VirtualMachines, Secrets, and PVCs. Anyone who can read the cloud-init Secret or VM console during bootstrap may obtain the JIT configuration.
+The kubeconfig identity needs get permission for images when using `--runner-image` or list permission when using `--runner-image-display-name` in the selected image namespace; get permission for network attachment definitions in the selected network namespace; and get/list/create/update/delete permission for VirtualMachines, Secrets, and PVCs in the runner namespace. Anyone who can read the cloud-init Secret or VM console during bootstrap may obtain the JIT configuration.
 
 ## Development
 

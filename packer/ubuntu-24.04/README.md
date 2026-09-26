@@ -36,7 +36,7 @@ Upload the qcow2 result as a Harvester VM image. Point the controller at that im
 
 ```bash
 harvester-scaleset \
-  --runner-image default/ubuntu-24.04-actions-runner \
+  --runner-image-display-name default/ubuntu-24.04-actions-runner-amd64.qcow2 \
   --skip-runner-install \
   # ...the remaining GitHub and Harvester options
 ```

@@ -28,12 +28,20 @@ func TestValidate(t *testing.T) {
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
 	}
+	byDisplayName := valid
+	byDisplayName.RunnerImage = ""
+	byDisplayName.RunnerImageDisplayName = "default/ubuntu.qcow2"
+	if err := byDisplayName.Validate(); err != nil {
+		t.Fatalf("valid display-name config rejected: %v", err)
+	}
 
 	tests := []struct {
 		name   string
 		mutate func(*Config)
 	}{
 		{"missing token", func(c *Config) { c.Token = "" }},
+		{"missing image", func(c *Config) { c.RunnerImage = "" }},
+		{"both image flags", func(c *Config) { c.RunnerImageDisplayName = "ubuntu.qcow2" }},
 		{"invalid counts", func(c *Config) { c.MinRunners, c.MaxRunners = 2, 1 }},
 		{"invalid memory", func(c *Config) { c.Memory = "lots" }},
 		{"invalid user", func(c *Config) { c.RunnerUser = "root\nExecStart=/bin/sh" }},
