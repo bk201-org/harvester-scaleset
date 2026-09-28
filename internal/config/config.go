@@ -1,9 +1,13 @@
 package config
 
 import (
+	"bytes"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"net/url"
 	"os"
 	"regexp"
@@ -24,6 +28,11 @@ const (
 
 var guestUserPattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]*[$]?$`)
 
+type HostMapping struct {
+	Host string
+	IP   string
+}
+
 type Config struct {
 	RegistrationURL        string
 	ScaleSetName           string
@@ -40,6 +49,10 @@ type Config struct {
 	Network                string
 	KeyPair                string
 	SSHUsername            string
+	ExtraHosts             []string
+	HostMappings           []HostMapping
+	ExtraCACertFiles       []string
+	TrustedCACerts         []string
 	MinRunners             int
 	MaxRunners             int
 	CPU                    int
@@ -74,6 +87,8 @@ func BindFlags(cmd *cobra.Command, c *Config) {
 	f.StringVar(&c.Network, "network", "", "Harvester VM network resource name or namespace/name")
 	f.StringVar(&c.KeyPair, "ssh-key", "", "Existing Harvester SSH keypair as namespace/name")
 	f.StringVar(&c.SSHUsername, "ssh-username", "", "Guest OS user to receive the keypair public key (defaults to runner-user)")
+	f.StringSliceVar(&c.ExtraHosts, "extra-host", nil, "Additional runner /etc/hosts entry as HOST=IP (comma-separated or repeated)")
+	f.StringSliceVar(&c.ExtraCACertFiles, "extra-ca-cert-file", nil, "PEM certificate file to trust in runner VMs (comma-separated or repeated)")
 	f.IntVar(&c.MinRunners, "min-runners", -1, "Minimum runner count")
 	f.IntVar(&c.MaxRunners, "max-runners", -1, "Maximum runner count")
 	f.IntVar(&c.CPU, "cpu", -1, "vCPUs per runner VM")
@@ -112,6 +127,12 @@ func (c *Config) Complete() error {
 	c.RunnerImageDisplayName = value(c.RunnerImageDisplayName, "HARVESTER_RUNNER_IMAGE_DISPLAY_NAME", "")
 	c.Network = value(c.Network, "HARVESTER_NETWORK", "")
 	c.KeyPair = value(c.KeyPair, "HARVESTER_KEYPAIR", "")
+	if len(c.ExtraHosts) == 0 {
+		c.ExtraHosts = envList("HARVESTER_EXTRA_HOSTS")
+	}
+	if len(c.ExtraCACertFiles) == 0 {
+		c.ExtraCACertFiles = envList("HARVESTER_EXTRA_CA_CERT_FILES")
+	}
 	c.Memory = value(c.Memory, "HARVESTER_MEMORY", "4Gi")
 	c.DiskSize = value(c.DiskSize, "HARVESTER_DISK_SIZE", "20Gi")
 	c.RunnerVersion = strings.TrimPrefix(value(c.RunnerVersion, "ACTIONS_RUNNER_VERSION", defaultRunnerVersion), "v")
@@ -180,7 +201,15 @@ func (c *Config) Complete() error {
 		}
 		c.Token = strings.TrimSpace(string(contents))
 	}
-	return c.Validate()
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	c.HostMappings, err = parseHostMappings(c.ExtraHosts)
+	if err != nil {
+		return err
+	}
+	c.TrustedCACerts, err = loadTrustedCACerts(c.ExtraCACertFiles)
+	return err
 }
 
 func (c Config) Validate() error {
@@ -254,6 +283,75 @@ func (c Config) Validate() error {
 		if strings.TrimSpace(label) == "" {
 			return fmt.Errorf("runner label at index %d is empty", i)
 		}
+	}
+	if _, err := parseHostMappings(c.ExtraHosts); err != nil {
+		return err
+	}
+	for _, path := range c.ExtraCACertFiles {
+		if strings.TrimSpace(path) == "" {
+			return errors.New("extra-ca-cert-file path cannot be empty")
+		}
+	}
+	return nil
+}
+
+func parseHostMappings(specs []string) ([]HostMapping, error) {
+	mappings := make([]HostMapping, 0, len(specs))
+	seen := make(map[string]bool, len(specs))
+	for _, spec := range specs {
+		host, ip, ok := strings.Cut(spec, "=")
+		host = strings.ToLower(strings.TrimSpace(host))
+		ip = strings.TrimSpace(ip)
+		if !ok || len(validation.IsDNS1123Subdomain(host)) != 0 {
+			return nil, fmt.Errorf("extra-host %q must be HOST=IP with a valid DNS hostname", spec)
+		}
+		addr, err := netip.ParseAddr(ip)
+		if err != nil || addr.Zone() != "" {
+			return nil, fmt.Errorf("extra-host %q must contain a valid IPv4 or IPv6 address", spec)
+		}
+		if seen[host] {
+			return nil, fmt.Errorf("extra-host hostname %q is duplicated", host)
+		}
+		seen[host] = true
+		mappings = append(mappings, HostMapping{Host: host, IP: addr.String()})
+	}
+	return mappings, nil
+}
+
+func loadTrustedCACerts(paths []string) ([]string, error) {
+	var certs []string
+	for _, path := range paths {
+		data, err := os.ReadFile(strings.TrimSpace(path))
+		if err != nil {
+			return nil, fmt.Errorf("read extra CA certificate file %q: %w", path, err)
+		}
+		count := 0
+		for len(bytes.TrimSpace(data)) > 0 {
+			data = bytes.TrimSpace(data)
+			if !bytes.HasPrefix(data, []byte("-----BEGIN CERTIFICATE-----")) {
+				return nil, fmt.Errorf("extra CA certificate file %q contains non-certificate data", path)
+			}
+			block, rest := pem.Decode(data)
+			if block == nil || block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
+				return nil, fmt.Errorf("extra CA certificate file %q contains invalid certificate PEM", path)
+			}
+			if _, err := x509.ParseCertificate(block.Bytes); err != nil {
+				return nil, fmt.Errorf("extra CA certificate file %q contains invalid X.509 certificate: %w", path, err)
+			}
+			certs = append(certs, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: block.Bytes})))
+			count++
+			data = rest
+		}
+		if count == 0 {
+			return nil, fmt.Errorf("extra CA certificate file %q contains no certificates", path)
+		}
+	}
+	return certs, nil
+}
+
+func envList(name string) []string {
+	if value := os.Getenv(name); value != "" {
+		return strings.Split(value, ",")
 	}
 	return nil
 }

@@ -6,15 +6,22 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/bk201-org/harvester-scaleset/internal/config"
 	"github.com/bk201-org/harvester-scaleset/internal/release"
 	"sigs.k8s.io/yaml"
 )
 
 type cloudConfig struct {
-	PackageUpdate bool        `json:"package_update"`
-	WriteFiles    []cloudFile `json:"write_files"`
-	RunCmd        [][]string  `json:"runcmd"`
-	Users         []any       `json:"users,omitempty"`
+	ManageEtcHosts *bool         `json:"manage_etc_hosts,omitempty"`
+	CACerts        *cloudCACerts `json:"ca_certs,omitempty"`
+	PackageUpdate  bool          `json:"package_update"`
+	WriteFiles     []cloudFile   `json:"write_files"`
+	RunCmd         [][]string    `json:"runcmd"`
+	Users          []any         `json:"users,omitempty"`
+}
+
+type cloudCACerts struct {
+	Trusted []string `json:"trusted"`
 }
 
 type cloudFile struct {
@@ -22,6 +29,7 @@ type cloudFile struct {
 	Owner       string `json:"owner,omitempty"`
 	Permissions string `json:"permissions"`
 	Encoding    string `json:"encoding,omitempty"`
+	Append      bool   `json:"append,omitempty"`
 	Content     string `json:"content"`
 }
 
@@ -40,6 +48,8 @@ type BootstrapConfig struct {
 	JITConfig         string
 	Artifact          release.Artifact
 	SkipRunnerInstall bool
+	HostMappings      []config.HostMapping
+	TrustedCACerts    []string
 }
 
 func RenderCloudInit(c BootstrapConfig) ([]byte, error) {
@@ -95,6 +105,22 @@ WantedBy=multi-user.target
 				Content:     base64.StdEncoding.EncodeToString([]byte("ACTIONS_RUNNER_INPUT_JITCONFIG=" + c.JITConfig + "\n")),
 			},
 		},
+	}
+	if len(c.HostMappings) > 0 {
+		manageHosts := false
+		config.ManageEtcHosts = &manageHosts
+		var entries strings.Builder
+		entries.WriteByte('\n')
+		for _, mapping := range c.HostMappings {
+			fmt.Fprintf(&entries, "%s %s\n", mapping.IP, mapping.Host)
+		}
+		config.WriteFiles = append(config.WriteFiles, cloudFile{
+			Path: "/etc/hosts", Owner: "root:root", Permissions: "0644",
+			Append: true, Content: entries.String(),
+		})
+	}
+	if len(c.TrustedCACerts) > 0 {
+		config.CACerts = &cloudCACerts{Trusted: append([]string(nil), c.TrustedCACerts...)}
 	}
 	if c.SSHPublicKey != "" {
 		sshUser := cloudUser{Name: c.SSHUsername, SSHAuthorizedKeys: []string{c.SSHPublicKey}}

@@ -106,6 +106,8 @@ Send `SIGINT` or `SIGTERM` for graceful, label-scoped cleanup. The current behav
 | `--network` | `HARVESTER_NETWORK` | required |
 | `--ssh-key` | `HARVESTER_KEYPAIR` | optional existing `namespace/name` |
 | `--ssh-username` | `HARVESTER_SSH_USERNAME` | `--runner-user` |
+| `--extra-host HOST=IP` | `HARVESTER_EXTRA_HOSTS` | none; comma-separated or repeated |
+| `--extra-ca-cert-file PATH` | `HARVESTER_EXTRA_CA_CERT_FILES` | none; comma-separated or repeated |
 | `--runner-group` | `GITHUB_RUNNER_GROUP` | `default` |
 | `--labels` | `GITHUB_RUNNER_LABELS` | scale-set name |
 | `--min-runners` | `MIN_RUNNERS` | `0` |
@@ -129,11 +131,28 @@ CLI values take precedence over their corresponding environment variables. Speci
 
 When `--ssh-key` is set, the controller checks that the Harvester `KeyPair` exists and has a public key during validation and before each VM is created. It adds that key to the `ssh_authorized_keys` of `--ssh-username` through the VM's cloud-init data. The SSH account defaults to `--runner-user`; set `--ssh-username` to use a different guest account. Cloud-init creates the account if it does not already exist. The SSH username must be a non-root Linux account. The keypair may be in a different namespace from the runner VMs.
 
+Add runner-only host mappings and trusted PEM certificates with repeatable flags:
+
+```bash
+harvester-scaleset \
+  --url https://github.com/OWNER/REPO \
+  --name harvester-runners \
+  --token-file /run/secrets/github-pat \
+  --kubeconfig /run/secrets/harvester-kubeconfig \
+  --runner-image default/ubuntu \
+  --network default/runner-network \
+  --extra-host git.internal=192.0.2.20 \
+  --extra-host registry.internal=2001:db8::20 \
+  --extra-ca-cert-file /etc/runner-ca/internal.pem
+```
+
+`HOST` must be a DNS hostname and `IP` must be IPv4 or IPv6. The corresponding environment variables accept comma-separated values; flags take precedence when supplied. A certificate file may contain one certificate or a PEM bundle. The file paths are local to the controller process; mount them there when running in a container. The controller reads and validates these files once at startup, including during `--validate-only`, and each new VM receives the certificates through its cloud-init Secret. Cloud-init appends the mappings to the guest's existing `/etc/hosts` and adds the certificates to its system CA trust store without removing default CAs. The guest image must have cloud-init's CA trust tooling, including the OS `ca-certificates` package, installed before first boot. The bundled Ubuntu runner image already includes it. Containers started by jobs manage their own trust stores.
+
 When `--skip-runner-install` is enabled, the selected image must already contain an executable `<runner-home>/run.sh` owned for use by `<runner-user>`. Cloud-init still writes the one-time JIT environment file and systemd service; it fails early if the baked runner executable is absent.
 
 ## Security and ownership
 
-The GitHub PAT remains in the controller process. A runner VM receives its short-lived JIT configuration and, when configured, the SSH public key through a per-VM Kubernetes Secret. All controller resources are labeled with their GitHub scale-set ID, and cleanup selects those labels rather than deleting arbitrary namespace resources.
+The GitHub PAT remains in the controller process. A runner VM receives its short-lived JIT configuration and, when configured, the SSH public key and extra CA certificates through a per-VM Kubernetes Secret. All controller resources are labeled with their GitHub scale-set ID, and cleanup selects those labels rather than deleting arbitrary namespace resources.
 
 The kubeconfig identity needs get permission for images when using `--runner-image` or list permission when using `--runner-image-display-name` in the selected image namespace; get permission for network attachment definitions in the selected network namespace; get permission for KeyPairs in the selected keypair namespace when `--ssh-key` is used; and get/list/create/update/delete permission for VirtualMachines, Secrets, and PVCs in the runner namespace. Anyone who can read the cloud-init Secret or VM console during bootstrap may obtain the JIT configuration.
 

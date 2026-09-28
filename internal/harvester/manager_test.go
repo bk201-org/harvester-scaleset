@@ -95,6 +95,8 @@ func TestCreateRunnerUsesKeyPair(t *testing.T) {
 			Namespace: "default", KeyPair: "keys/access", SSHUsername: "ubuntu",
 			RunnerUser: "runner", RunnerHome: "/opt/actions-runner", SkipRunnerInstall: true,
 			CPU: 1, Memory: "1Gi", DiskSize: "10Gi", ScaleSetName: "test",
+			HostMappings:   []config.HostMapping{{Host: "git.internal", IP: "192.0.2.20"}},
+			TrustedCACerts: []string{"test-cert"},
 		},
 		imageRef: "default/ubuntu", storageClass: "image-storage-class", networkRef: "default/network",
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -110,6 +112,12 @@ func TestCreateRunnerUsesKeyPair(t *testing.T) {
 	userData := secret.StringData["userdata"]
 	if !strings.Contains(userData, "name: ubuntu") || !strings.Contains(userData, publicKey) {
 		t.Fatalf("cloud-init does not assign key to ubuntu: %s", userData)
+	}
+	if !strings.Contains(userData, "192.0.2.20 git.internal") ||
+		!strings.Contains(userData, "manage_etc_hosts: false") ||
+		!strings.Contains(userData, "trusted:") ||
+		!strings.Contains(userData, "test-cert") {
+		t.Fatalf("cloud-init Secret lacks runner host or CA settings: %s", userData)
 	}
 	if _, err := dynamic.Resource(vmGVR).Namespace("default").Get(context.Background(), spec.Name, metav1.GetOptions{}); err != nil {
 		t.Fatal(err)

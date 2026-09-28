@@ -265,6 +265,8 @@ func (m *Manager) CreateRunner(ctx context.Context, spec RunnerSpec) error {
 		JITConfig:         spec.JITConfig,
 		Artifact:          m.artifact,
 		SkipRunnerInstall: m.cfg.SkipRunnerInstall,
+		HostMappings:      m.cfg.HostMappings,
+		TrustedCACerts:    m.cfg.TrustedCACerts,
 	})
 	if err != nil {
 		return fmt.Errorf("render cloud-init for %s: %w", spec.Name, err)
