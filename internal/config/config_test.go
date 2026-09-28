@@ -28,6 +28,12 @@ func TestValidate(t *testing.T) {
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
 	}
+	withKeyPair := valid
+	withKeyPair.KeyPair = "default/hvst-dev-pubkey"
+	withKeyPair.SSHUsername = "ubuntu"
+	if err := withKeyPair.Validate(); err != nil {
+		t.Fatalf("valid keypair config rejected: %v", err)
+	}
 	byDisplayName := valid
 	byDisplayName.RunnerImage = ""
 	byDisplayName.RunnerImageDisplayName = "default/ubuntu.qcow2"
@@ -45,6 +51,13 @@ func TestValidate(t *testing.T) {
 		{"invalid counts", func(c *Config) { c.MinRunners, c.MaxRunners = 2, 1 }},
 		{"invalid memory", func(c *Config) { c.Memory = "lots" }},
 		{"invalid user", func(c *Config) { c.RunnerUser = "root\nExecStart=/bin/sh" }},
+		{"unqualified keypair", func(c *Config) { c.KeyPair = "hvst-dev-pubkey" }},
+		{"empty keypair namespace", func(c *Config) { c.KeyPair = "/hvst-dev-pubkey" }},
+		{"extra keypair path", func(c *Config) { c.KeyPair = "default/team/key" }},
+		{"invalid keypair name", func(c *Config) { c.KeyPair = "default/Bad_Key" }},
+		{"missing SSH username", func(c *Config) { c.KeyPair = "default/key"; c.SSHUsername = "" }},
+		{"invalid SSH username", func(c *Config) { c.KeyPair = "default/key"; c.SSHUsername = "root\nhello" }},
+		{"root SSH username", func(c *Config) { c.KeyPair = "default/key"; c.SSHUsername = "root" }},
 		{"relative home", func(c *Config) { c.RunnerHome = "runner" }},
 		{"unsupported arch", func(c *Config) { c.RunnerArch = "mips" }},
 	}

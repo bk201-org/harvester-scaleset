@@ -14,6 +14,7 @@ type cloudConfig struct {
 	PackageUpdate bool        `json:"package_update"`
 	WriteFiles    []cloudFile `json:"write_files"`
 	RunCmd        [][]string  `json:"runcmd"`
+	Users         []any       `json:"users,omitempty"`
 }
 
 type cloudFile struct {
@@ -24,8 +25,17 @@ type cloudFile struct {
 	Content     string `json:"content"`
 }
 
+type cloudUser struct {
+	Name              string   `json:"name"`
+	HomeDir           string   `json:"homedir,omitempty"`
+	Shell             string   `json:"shell,omitempty"`
+	SSHAuthorizedKeys []string `json:"ssh_authorized_keys"`
+}
+
 type BootstrapConfig struct {
 	RunnerUser        string
+	SSHUsername       string
+	SSHPublicKey      string
 	RunnerHome        string
 	JITConfig         string
 	Artifact          release.Artifact
@@ -35,6 +45,12 @@ type BootstrapConfig struct {
 func RenderCloudInit(c BootstrapConfig) ([]byte, error) {
 	if c.RunnerUser == "" || c.RunnerHome == "" || c.JITConfig == "" {
 		return nil, fmt.Errorf("cloud-init bootstrap configuration is incomplete")
+	}
+	if c.SSHPublicKey != "" && c.SSHUsername == "" {
+		return nil, fmt.Errorf("cloud-init SSH username is required with a public key")
+	}
+	if c.SSHPublicKey != "" && c.SSHUsername == "root" {
+		return nil, fmt.Errorf("cloud-init SSH username cannot be root")
 	}
 	if err := validateGuestPath(c.RunnerHome); err != nil {
 		return nil, err
@@ -79,6 +95,14 @@ WantedBy=multi-user.target
 				Content:     base64.StdEncoding.EncodeToString([]byte("ACTIONS_RUNNER_INPUT_JITCONFIG=" + c.JITConfig + "\n")),
 			},
 		},
+	}
+	if c.SSHPublicKey != "" {
+		sshUser := cloudUser{Name: c.SSHUsername, SSHAuthorizedKeys: []string{c.SSHPublicKey}}
+		if c.SSHUsername == c.RunnerUser {
+			sshUser.HomeDir = c.RunnerHome
+			sshUser.Shell = "/bin/bash"
+		}
+		config.Users = []any{"default", sshUser}
 	}
 	if c.SkipRunnerInstall {
 		config.RunCmd = [][]string{

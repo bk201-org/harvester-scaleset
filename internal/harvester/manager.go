@@ -46,6 +46,7 @@ var (
 	vmGVR      = schema.GroupVersionResource{Group: "kubevirt.io", Version: "v1", Resource: "virtualmachines"}
 	imageGVR   = schema.GroupVersionResource{Group: "harvesterhci.io", Version: "v1beta1", Resource: "virtualmachineimages"}
 	networkGVR = schema.GroupVersionResource{Group: "k8s.cni.cncf.io", Version: "v1", Resource: "network-attachment-definitions"}
+	keyPairGVR = schema.GroupVersionResource{Group: "harvesterhci.io", Version: "v1beta1", Resource: "keypairs"}
 )
 
 type RunnerSpec struct {
@@ -183,6 +184,9 @@ func (m *Manager) Preflight(ctx context.Context) error {
 	if _, err := m.client.Dynamic.Resource(networkGVR).Namespace(networkNS).Get(ctx, networkName, metav1.GetOptions{}); err != nil {
 		return fmt.Errorf("get VM network %s/%s: %w", networkNS, networkName, err)
 	}
+	if _, err := m.keyPairPublicKey(ctx); err != nil {
+		return err
+	}
 	m.imageRef = imageNS + "/" + imageName
 	m.storageClass = storageClass
 	if networkNS == m.cfg.Namespace {
@@ -196,6 +200,29 @@ func (m *Manager) Preflight(ctx context.Context) error {
 	}
 	m.logger.Info("Harvester preflight complete", "namespace", m.cfg.Namespace, "image", m.imageRef, "network", networkNS+"/"+networkName, "runnerVersion", runnerVersion)
 	return nil
+}
+
+func (m *Manager) keyPairPublicKey(ctx context.Context) (string, error) {
+	if m.cfg.KeyPair == "" {
+		return "", nil
+	}
+	parts := strings.Split(m.cfg.KeyPair, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", fmt.Errorf("keypair %q must be namespace/name", m.cfg.KeyPair)
+	}
+	keyPair, err := m.client.Dynamic.Resource(keyPairGVR).Namespace(parts[0]).Get(ctx, parts[1], metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("get keypair %s: %w", m.cfg.KeyPair, err)
+	}
+	publicKey, found, err := unstructured.NestedString(keyPair.Object, "spec", "publicKey")
+	if err != nil {
+		return "", fmt.Errorf("read keypair %s public key: %w", m.cfg.KeyPair, err)
+	}
+	publicKey = strings.TrimSpace(publicKey)
+	if !found || publicKey == "" || strings.ContainsAny(publicKey, "\r\n") {
+		return "", fmt.Errorf("keypair %s has no valid single-line public key", m.cfg.KeyPair)
+	}
+	return publicKey, nil
 }
 
 func (m *Manager) findRunnerImageByDisplayName(ctx context.Context, namespace, wantedDisplayName string) (*unstructured.Unstructured, error) {
@@ -225,9 +252,15 @@ func (m *Manager) findRunnerImageByDisplayName(ctx context.Context, namespace, w
 }
 
 func (m *Manager) CreateRunner(ctx context.Context, spec RunnerSpec) error {
+	publicKey, err := m.keyPairPublicKey(ctx)
+	if err != nil {
+		return err
+	}
 	labels := m.labels(spec.ScaleSetID, spec.Name)
 	userData, err := RenderCloudInit(BootstrapConfig{
 		RunnerUser:        m.cfg.RunnerUser,
+		SSHUsername:       m.cfg.SSHUsername,
+		SSHPublicKey:      publicKey,
 		RunnerHome:        m.cfg.RunnerHome,
 		JITConfig:         spec.JITConfig,
 		Artifact:          m.artifact,

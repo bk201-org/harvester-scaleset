@@ -160,3 +160,65 @@ func testRunnerImage(namespace, name, displayName string) *unstructured.Unstruct
 		},
 	}}
 }
+
+func TestPreflightKeyPair(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name    string
+		keyPair *unstructured.Unstructured
+		wantErr string
+	}{
+		{name: "existing keypair", keyPair: testKeyPair("keys", "access", "ssh-ed25519 AAAA example")},
+		{name: "missing keypair", wantErr: "get keypair keys/access"},
+		{name: "empty public key", keyPair: testKeyPair("keys", "access", ""), wantErr: "no valid single-line public key"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			objects := []runtime.Object{testRunnerImage("default", "ubuntu", "ubuntu")}
+			if tt.keyPair != nil {
+				objects = append(objects, tt.keyPair)
+			}
+			dynamic := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+				runtime.NewScheme(),
+				map[schema.GroupVersionResource]string{imageGVR: "VirtualMachineImageList", keyPairGVR: "KeyPairList"},
+				objects...,
+			)
+			_, err := dynamic.Resource(networkGVR).Namespace("default").Create(context.Background(), &unstructured.Unstructured{Object: map[string]any{
+				"apiVersion": "k8s.cni.cncf.io/v1",
+				"kind":       "NetworkAttachmentDefinition",
+				"metadata":   map[string]any{"name": "network", "namespace": "default"},
+			}}, metav1.CreateOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			m := &Manager{
+				client: &Client{Dynamic: dynamic, Kube: kubefake.NewSimpleClientset(&corev1.Namespace{
+					ObjectMeta: metav1.ObjectMeta{Name: "default"},
+				})},
+				cfg: config.Config{
+					Namespace: "default", RunnerImage: "default/ubuntu", Network: "default/network",
+					DiskSize: "10Gi", KeyPair: "keys/access",
+				},
+				logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+			}
+			err = m.Preflight(context.Background())
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Preflight error = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func testKeyPair(namespace, name, publicKey string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "harvesterhci.io/v1beta1",
+		"kind":       "KeyPair",
+		"metadata":   map[string]any{"name": name, "namespace": namespace},
+		"spec":       map[string]any{"publicKey": publicKey},
+	}}
+}

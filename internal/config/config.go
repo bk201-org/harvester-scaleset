@@ -14,6 +14,7 @@ import (
 	"github.com/actions/scaleset"
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 const (
@@ -37,6 +38,8 @@ type Config struct {
 	RunnerImage            string
 	RunnerImageDisplayName string
 	Network                string
+	KeyPair                string
+	SSHUsername            string
 	MinRunners             int
 	MaxRunners             int
 	CPU                    int
@@ -69,6 +72,8 @@ func BindFlags(cmd *cobra.Command, c *Config) {
 	f.StringVar(&c.RunnerImage, "runner-image", "", "Harvester image resource name, optionally namespace/name")
 	f.StringVar(&c.RunnerImageDisplayName, "runner-image-display-name", "", "Exact Harvester image spec.displayName, optionally namespace/name")
 	f.StringVar(&c.Network, "network", "", "Harvester VM network resource name or namespace/name")
+	f.StringVar(&c.KeyPair, "ssh-key", "", "Existing Harvester SSH keypair as namespace/name")
+	f.StringVar(&c.SSHUsername, "ssh-username", "", "Guest OS user to receive the keypair public key (defaults to runner-user)")
 	f.IntVar(&c.MinRunners, "min-runners", -1, "Minimum runner count")
 	f.IntVar(&c.MaxRunners, "max-runners", -1, "Maximum runner count")
 	f.IntVar(&c.CPU, "cpu", -1, "vCPUs per runner VM")
@@ -106,11 +111,13 @@ func (c *Config) Complete() error {
 	c.RunnerImage = value(c.RunnerImage, "HARVESTER_RUNNER_IMAGE", "")
 	c.RunnerImageDisplayName = value(c.RunnerImageDisplayName, "HARVESTER_RUNNER_IMAGE_DISPLAY_NAME", "")
 	c.Network = value(c.Network, "HARVESTER_NETWORK", "")
+	c.KeyPair = value(c.KeyPair, "HARVESTER_KEYPAIR", "")
 	c.Memory = value(c.Memory, "HARVESTER_MEMORY", "4Gi")
 	c.DiskSize = value(c.DiskSize, "HARVESTER_DISK_SIZE", "20Gi")
 	c.RunnerVersion = strings.TrimPrefix(value(c.RunnerVersion, "ACTIONS_RUNNER_VERSION", defaultRunnerVersion), "v")
 	c.RunnerArch = value(c.RunnerArch, "ACTIONS_RUNNER_ARCH", defaultRunnerArch)
 	c.RunnerUser = value(c.RunnerUser, "HARVESTER_RUNNER_USER", "runner")
+	c.SSHUsername = value(c.SSHUsername, "HARVESTER_SSH_USERNAME", c.RunnerUser)
 	c.RunnerHome = value(c.RunnerHome, "HARVESTER_RUNNER_HOME", "/opt/actions-runner")
 	if !c.SkipRunnerInstall {
 		skipRunnerInstall, err := envBool("HARVESTER_SKIP_RUNNER_INSTALL", false)
@@ -222,6 +229,18 @@ func (c Config) Validate() error {
 	}
 	if !guestUserPattern.MatchString(c.RunnerUser) {
 		return fmt.Errorf("runner-user %q is not a valid Linux account name", c.RunnerUser)
+	}
+	if c.KeyPair != "" {
+		parts := strings.Split(c.KeyPair, "/")
+		if len(parts) != 2 || len(validation.IsDNS1123Label(parts[0])) != 0 || len(validation.IsDNS1123Subdomain(parts[1])) != 0 {
+			return fmt.Errorf("keypair %q must be namespace/name", c.KeyPair)
+		}
+		if !guestUserPattern.MatchString(c.SSHUsername) {
+			return fmt.Errorf("ssh-username %q is not a valid Linux account name", c.SSHUsername)
+		}
+		if c.SSHUsername == "root" {
+			return errors.New("ssh-username cannot be root")
+		}
 	}
 	if !strings.HasPrefix(c.RunnerHome, "/") {
 		return errors.New("runner-home must be an absolute path")
