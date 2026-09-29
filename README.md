@@ -89,6 +89,8 @@ Validation checks the runner release and Harvester namespace, image, network, an
   --max-runners 10
 ```
 
+The controller adds `self-hosted` to every GitHub scale set's routing labels, alongside `--labels` (or the scale-set name when no labels are supplied). For the example above, use `runs-on: [self-hosted, harvester-runners]`. These are scale-set routing labels; GitHub may not show them on each ephemeral runner's entry. On GitHub Enterprise Server, multiple scale-set labels require version 3.18 or later and the `DistributedTask.AllowRunnerScaleSetCustomLabels` feature flag (enabled by default from 3.21).
+
 Send `SIGINT` or `SIGTERM` for graceful, label-scoped cleanup. The current behavior matches the upstream Docker example and deletes busy runner VMs rather than draining them.
 
 ## Configuration
@@ -109,7 +111,7 @@ Send `SIGINT` or `SIGTERM` for graceful, label-scoped cleanup. The current behav
 | `--extra-host HOST=IP` | `HARVESTER_EXTRA_HOSTS` | none; comma-separated or repeated |
 | `--extra-ca-cert-file PATH` | `HARVESTER_EXTRA_CA_CERT_FILES` | none; comma-separated or repeated |
 | `--runner-group` | `GITHUB_RUNNER_GROUP` | `default` |
-| `--labels` | `GITHUB_RUNNER_LABELS` | scale-set name |
+| `--labels` | `GITHUB_RUNNER_LABELS` | scale-set name, plus `self-hosted` |
 | `--min-runners` | `MIN_RUNNERS` | `0` |
 | `--max-runners` | `MAX_RUNNERS` | `10` |
 | `--cpu` | `HARVESTER_CPU` | `2` |

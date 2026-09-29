@@ -364,12 +364,16 @@ func (c Config) KubeconfigValue() string {
 }
 
 func (c Config) ScaleSetLabels() []scaleset.Label {
+	labels := []scaleset.Label{{Name: "self-hosted"}}
 	if len(c.Labels) == 0 {
-		return []scaleset.Label{{Name: c.ScaleSetName}}
+		c.Labels = []string{c.ScaleSetName}
 	}
-	labels := make([]scaleset.Label, 0, len(c.Labels))
 	for _, label := range c.Labels {
-		labels = append(labels, scaleset.Label{Name: strings.TrimSpace(label)})
+		name := strings.TrimSpace(label)
+		if strings.EqualFold(name, "self-hosted") {
+			continue
+		}
+		labels = append(labels, scaleset.Label{Name: name})
 	}
 	return labels
 }

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/actions/scaleset"
 	"github.com/spf13/cobra"
 )
 
@@ -82,6 +83,38 @@ func TestValidate(t *testing.T) {
 			test.mutate(&candidate)
 			if err := candidate.Validate(); err == nil {
 				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
+func TestScaleSetLabels(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		config Config
+		want   []scaleset.Label
+	}{
+		{
+			name:   "default",
+			config: Config{ScaleSetName: "harvester-runners"},
+			want:   []scaleset.Label{{Name: "self-hosted"}, {Name: "harvester-runners"}},
+		},
+		{
+			name:   "custom labels",
+			config: Config{ScaleSetName: "harvester-runners", Labels: []string{"harvester-runners", "linux"}},
+			want:   []scaleset.Label{{Name: "self-hosted"}, {Name: "harvester-runners"}, {Name: "linux"}},
+		},
+		{
+			name:   "already configured",
+			config: Config{Labels: []string{"harvester-runners", " Self-Hosted "}},
+			want:   []scaleset.Label{{Name: "self-hosted"}, {Name: "harvester-runners"}},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.config.ScaleSetLabels(); !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("scale set labels = %#v, want %#v", got, test.want)
 			}
 		})
 	}
