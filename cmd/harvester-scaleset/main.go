@@ -18,6 +18,7 @@ import (
 
 	"github.com/bk201-org/harvester-scaleset/internal/config"
 	"github.com/bk201-org/harvester-scaleset/internal/harvester"
+	"github.com/bk201-org/harvester-scaleset/internal/registration"
 	"github.com/bk201-org/harvester-scaleset/internal/release"
 	"github.com/bk201-org/harvester-scaleset/internal/scaler"
 )
@@ -26,6 +27,10 @@ var (
 	version   = "dev"
 	commitSHA = "unknown"
 )
+
+// sessionRetry waits out a message session left by an uncleanly stopped
+// controller before concluding that another controller owns the scale set.
+var sessionRetry = registration.SessionRetry{Interval: 30 * time.Second, Timeout: 3 * time.Minute}
 
 func main() {
 	var cfg config.Config
@@ -96,22 +101,45 @@ func run(ctx context.Context, cfg config.Config) (runErr error) {
 		}
 		runnerGroupID = group.ID
 	}
-	createdScaleSet, err := githubClient.CreateRunnerScaleSet(ctx, &scaleset.RunnerScaleSet{
+	desiredScaleSet := scaleset.RunnerScaleSet{
 		Name:          cfg.ScaleSetName,
 		RunnerGroupID: runnerGroupID,
 		Labels:        cfg.ScaleSetLabels(),
 		RunnerSetting: scaleset.RunnerSetting{DisableUpdate: true},
-	})
-	if err != nil {
-		return fmt.Errorf("create GitHub runner scale set: %w", err)
 	}
-	githubClient.SetSystemInfo(systemInfo(createdScaleSet.ID))
-	logger.Info("Created GitHub runner scale set", "scaleSetID", createdScaleSet.ID, "name", createdScaleSet.Name)
+	runnerScaleSet, created, err := registration.EnsureScaleSet(ctx, githubClient, desiredScaleSet)
+	if err != nil {
+		return err
+	}
+	githubClient.SetSystemInfo(systemInfo(runnerScaleSet.ID))
+	if created {
+		logger.Info("Created GitHub runner scale set", "scaleSetID", runnerScaleSet.ID, "name", runnerScaleSet.Name)
+	} else {
+		logger.Info("Found existing GitHub runner scale set; adopting it", "scaleSetID", runnerScaleSet.ID, "name", runnerScaleSet.Name)
+	}
 
-	var (
-		scaleSetScaler *scaler.Scaler
-		closeSession   func(context.Context) error
-	)
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = controllerID
+	}
+	session, err := registration.AcquireSession(ctx, func(ctx context.Context) (*scaleset.MessageSessionClient, error) {
+		return githubClient.MessageSessionClient(ctx, runnerScaleSet.ID, hostname)
+	}, sessionRetry, logger)
+	if err != nil {
+		err = fmt.Errorf("create GitHub message session: %w", err)
+		// Only remove a scale set this run created; an adopted one may
+		// belong to a controller that still holds its session.
+		if created {
+			deleteCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if deleteErr := githubClient.DeleteRunnerScaleSet(deleteCtx, runnerScaleSet.ID); deleteErr != nil {
+				err = errors.Join(err, fmt.Errorf("delete GitHub runner scale set: %w", deleteErr))
+			}
+		}
+		return err
+	}
+
+	var scaleSetScaler *scaler.Scaler
 	defer func() {
 		if scaleSetScaler != nil {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), cfg.VMDeleteTimeout)
@@ -121,36 +149,30 @@ func run(ctx context.Context, cfg config.Config) (runErr error) {
 			}
 			cancel()
 		}
-		if closeSession != nil {
-			closeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			if err := closeSession(closeCtx); err != nil {
-				logger.Error("Failed to close GitHub message session", "error", err)
-				runErr = errors.Join(runErr, fmt.Errorf("close GitHub message session: %w", err))
-			}
-			cancel()
+		closeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := session.Close(closeCtx); err != nil {
+			logger.Error("Failed to close GitHub message session", "error", err)
+			runErr = errors.Join(runErr, fmt.Errorf("close GitHub message session: %w", err))
 		}
+		cancel()
 		deleteCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if err := githubClient.DeleteRunnerScaleSet(deleteCtx, createdScaleSet.ID); err != nil {
-			logger.Error("Failed to delete GitHub runner scale set", "scaleSetID", createdScaleSet.ID, "error", err)
+		if err := githubClient.DeleteRunnerScaleSet(deleteCtx, runnerScaleSet.ID); err != nil {
+			logger.Error("Failed to delete GitHub runner scale set", "scaleSetID", runnerScaleSet.ID, "error", err)
 			runErr = errors.Join(runErr, fmt.Errorf("delete GitHub runner scale set: %w", err))
 		}
 	}()
 
-	hostname, err := os.Hostname()
-	if err != nil {
-		hostname = controllerID
+	if !created {
+		if _, err := registration.Reconcile(ctx, githubClient, runnerScaleSet.ID, desiredScaleSet); err != nil {
+			return err
+		}
 	}
-	session, err := githubClient.MessageSessionClient(ctx, createdScaleSet.ID, hostname)
-	if err != nil {
-		return fmt.Errorf("create GitHub message session: %w", err)
-	}
-	closeSession = session.Close
 
 	scaleSetScaler, err = scaler.New(scaler.Config{
 		Backend:       backend,
 		GitHub:        githubClient,
-		ScaleSetID:    createdScaleSet.ID,
+		ScaleSetID:    runnerScaleSet.ID,
 		ScaleSetName:  cfg.ScaleSetName,
 		MinRunners:    cfg.MinRunners,
 		MaxRunners:    cfg.MaxRunners,
@@ -164,14 +186,14 @@ func run(ctx context.Context, cfg config.Config) (runErr error) {
 	go scaleSetScaler.RunReconciler(ctx, cfg.ReconcileInterval)
 
 	messageListener, err := listener.New(session, listener.Config{
-		ScaleSetID: createdScaleSet.ID,
+		ScaleSetID: runnerScaleSet.ID,
 		MaxRunners: cfg.MaxRunners,
 		Logger:     logger.WithGroup("listener"),
 	})
 	if err != nil {
 		return fmt.Errorf("create GitHub message listener: %w", err)
 	}
-	logger.Info("Starting GitHub runner scale set listener", slog.Int("scaleSetID", createdScaleSet.ID))
+	logger.Info("Starting GitHub runner scale set listener", slog.Int("scaleSetID", runnerScaleSet.ID))
 	if err := messageListener.Run(ctx, scaleSetScaler); err != nil && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("run GitHub message listener: %w", err)
 	}
